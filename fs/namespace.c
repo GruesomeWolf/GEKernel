@@ -942,6 +942,10 @@ static int do_umount(struct mount *mnt, int flags)
 	br_write_unlock(vfsmount_lock);
 	up_write(&namespace_sem);
 	release_mounts(&umount_list);
+
+	printk(KERN_INFO "pid:%d(%s)(parent:%d/%s)  (%s) umounted filesystem.\n",
+			current->pid, current->comm, current->parent->pid,
+			current->parent->comm, sb->s_id);
 	return retval;
 }
 
@@ -982,6 +986,41 @@ out:
 	return retval;
 }
 
+int umount2(char *name, int flags)
+{
+	struct path path;
+	struct mount *mnt;
+	int retval;
+	int lookup_flags = 0;
+
+	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+		return -EINVAL;
+
+	if (!(flags & UMOUNT_NOFOLLOW))
+		lookup_flags |= LOOKUP_FOLLOW;
+
+	retval = user_path_at(AT_FDCWD, name, lookup_flags, &path);
+	if (retval)
+		goto out;
+	mnt = real_mount(path.mnt);
+	retval = -EINVAL;
+	if (path.dentry != path.mnt->mnt_root)
+		goto dput_and_out;
+	if (!check_mnt(mnt))
+		goto dput_and_out;
+#if 0
+	retval = -EPERM;
+	if (!capable(CAP_SYS_ADMIN))
+		goto dput_and_out;
+#endif
+	retval = do_umount(mnt, flags);
+dput_and_out:
+	
+	dput(path.dentry);
+	mntput_no_expire(mnt);
+out:
+	return retval;
+}
 #ifdef __ARCH_WANT_SYS_OLDUMOUNT
 
 SYSCALL_DEFINE1(oldumount, char __user *, name)
@@ -1533,6 +1572,11 @@ static int do_new_mount(struct path *path, char *type, int flags,
 	err = do_add_mount(real_mount(mnt), path, mnt_flags);
 	if (err)
 		mntput(mnt);
+#ifdef CONFIG_ASYNC_FSYNC
+	if (!err && ((!strcmp(type, "ext4") && !strcmp(path->dentry->d_name.name, "data"))
+		|| (!strcmp(type, "fuse") && !strcmp(path->dentry->d_name.name, "emulated"))))
+		mnt->mnt_sb->fsync_flags |= FLAG_ASYNC_FSYNC;
+#endif
 	return err;
 }
 
@@ -1745,35 +1789,6 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 	if (data_page)
 		((char *)data_page)[PAGE_SIZE - 1] = 0;
 
-#ifdef CONFIG_RESTRICT_ROOTFS_SLAVE
-	/* Check if this is an attempt to mark "/" as recursive-slave. */
-	if (strcmp(dir_name, "/") == 0 && flags == (MS_SLAVE | MS_REC)) {
-		static const char storage[] = "/storage";
-		static const char source[]  = "/mnt/shell/emulated";
-		long res;
-
-		/* Mark /storage as recursive-slave instead. */
-		if ((res = do_mount(NULL, (char *)storage, NULL, (MS_SLAVE | MS_REC), NULL)) == 0) {
-			/* Unfortunately bind mounts from outside /storage may retain the
-			 * recursive-shared property (bug?).  This means any additional
-			 * namespace-specific bind mounts (e.g., /storage/emulated/0/Android/obb)
-			 * will also appear, shared in all namespaces, at their respective source
-			 * paths (e.g., /mnt/shell/emulated/0/Android/obb), possibly leading to
-			 * hundreds of /proc/mounts-visible bind mounts.  As a workaround, mark
-			 * /mnt/shell/emulated also as recursive-slave so that subsequent bind
-			 * mounts are confined to their namespaces. */
-			if ((res = do_mount(NULL, (char *)source, NULL, (MS_SLAVE | MS_REC), NULL)) == 0)
-				/* Both paths successfully marked as slave, leave the rest of the
-				 * filesystem hierarchy alone. */
-				return 0;
-			else
-				pr_warn("Failed to mount %s as MS_SLAVE: %ld\n", source, res);
-		} else {
-			pr_warn("Failed to mount %s as MS_SLAVE: %ld\n", storage, res);
-		}
-		/* Fallback: Mark rootfs as recursive-slave as requested. */
-	}
-#endif
 	
 	retval = kern_path(dir_name, LOOKUP_FOLLOW, &path);
 	if (retval)
@@ -1981,9 +1996,9 @@ SYSCALL_DEFINE5(mount, char __user *, dev_name, char __user *, dir_name,
 		char __user *, type, unsigned long, flags, void __user *, data)
 {
 	int ret;
-	char *kernel_type = NULL; 
+	char *kernel_type;
 	char *kernel_dir;
-	char *kernel_dev = NULL; 
+	char *kernel_dev;
 	unsigned long data_page;
 
 	ret = copy_mount_string(type, &kernel_type);

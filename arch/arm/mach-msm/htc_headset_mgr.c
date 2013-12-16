@@ -260,6 +260,14 @@ int headset_notifier_register(struct headset_notifier *notifier)
 		HS_LOG("Register 1WIRE_REPORT_TYPE notifier");
 		hs_mgr_notifier.hs_1wire_report_type = notifier->func;
 		break;
+	case HEADSET_REG_1WIRE_OPEN:
+		HS_LOG("Register HEADSET_REG_1WIRE_OPEN notifier");
+		hs_mgr_notifier.hs_1wire_open = notifier->func;
+		break;
+	case HEADSET_REG_HS_INSERT:
+		HS_LOG("Register HS_INSERT notifier");
+		hs_mgr_notifier.hs_insert = notifier->func;
+		break;
 	default:
 		HS_LOG("Unknown register ID");
 		return 0;
@@ -648,9 +656,7 @@ static void mic_detect_work_func(struct work_struct *work)
 					   HS_JIFFIES_MIC_DETECT);
 		} else {
 			HS_LOG("MIC polling timeout (UNKNOWN/Floating MIC status)");
-			if (hs_mgr_notifier.key_int_enable)
-				hs_mgr_notifier.key_int_enable(1);
-
+			set_35mm_hw_state(0);			
 		}
 		return;
 	}
@@ -679,6 +685,7 @@ static void mic_detect_work_func(struct work_struct *work)
 	case HEADSET_NO_MIC:
 		new_state |= BIT_HEADSET_NO_MIC;
 		HS_LOG("HEADSET_NO_MIC");
+		set_35mm_hw_state(0);
 		break;
 	case HEADSET_MIC:
 		new_state |= BIT_HEADSET;
@@ -723,9 +730,11 @@ static void mic_detect_work_func(struct work_struct *work)
 	} else
 		HS_LOG("MIC status has not changed");
 
+if (mic != HEADSET_NO_MIC)
+	{
 	if (hs_mgr_notifier.key_int_enable)
 		hs_mgr_notifier.key_int_enable(1);
-
+	}
 	mutex_unlock(&hi->mutex_lock);
 }
 
@@ -955,6 +964,7 @@ static void insert_detect_work_func(struct work_struct *work)
 	case HEADSET_NO_MIC:
 		new_state |= BIT_HEADSET_NO_MIC;
 		HS_LOG_TIME("HEADSET_NO_MIC");
+		set_35mm_hw_state(0);
 		break;
 	case HEADSET_MIC:
 		new_state |= BIT_HEADSET;
@@ -1002,10 +1012,11 @@ static void insert_detect_work_func(struct work_struct *work)
 	switch_set_state(&hi->sdev_h2w, new_state);
 	hpin_report++;
 
-
-	if (hs_mgr_notifier.key_int_enable)
-		hs_mgr_notifier.key_int_enable(1);
-
+	if (mic != HEADSET_NO_MIC)
+		{
+			if (hs_mgr_notifier.key_int_enable)
+				hs_mgr_notifier.key_int_enable(1);
+		}
 	mutex_unlock(&hi->mutex_lock);
 
 #ifdef HTC_HEADSET_CONFIG_QUICK_BOOT
@@ -1033,6 +1044,9 @@ int hs_notify_plug_event(int insert, unsigned int intr_id)
 	mutex_lock(&hi->mutex_lock);
 	hi->is_ext_insert = insert;
 	mutex_unlock(&hi->mutex_lock);
+
+	if (hs_mgr_notifier.hs_insert)
+		hs_mgr_notifier.hs_insert(insert);
 
 	cancel_delayed_work_sync(&mic_detect_work);
 	ret = cancel_delayed_work_sync(&insert_detect_work);
@@ -1221,8 +1235,10 @@ int hs_notify_key_irq(void)
 	if (hi->one_wire_mode == 1 && hs_hpin_stable() && hi->is_ext_insert) {
 		wake_lock_timeout(&hi->hs_wake_lock, HS_WAKE_LOCK_TIMEOUT);
 		key_code = hs_mgr_notifier.hs_1wire_read_key();
-		if (key_code < 0)
+		if (key_code < 0) {
+			wake_unlock(&hi->hs_wake_lock);
 			return 1;
+		}
 		if (key_code == 2 || key_code == 3 || pre_key == 2 || pre_key == 3) {
 			queue_delayed_work(button_wq, &button_1wire_work, HS_JIFFIES_1WIRE_BUTTON_SHORT);
 			HS_LOG("Use short delay");
@@ -1249,8 +1265,8 @@ int hs_notify_key_irq(void)
 	}
 
 	
-	if ((hi->hs_35mm_type == HEADSET_NO_MIC ||
-		   hi->hs_35mm_type == HEADSET_UNKNOWN_MIC) && time_before_eq(jiffies, hi->hpin_jiffies + 10 * HZ)) {
+	if ((hi->hs_35mm_type == HEADSET_NO_MIC || hi->hs_35mm_type == HEADSET_UNKNOWN_MIC) &&
+		time_before_eq(jiffies, hi->hpin_jiffies + 10 * HZ)) {
 		HS_LOG("IGNORE key IRQ (Unstable HPIN)");
 		
 		update_mic_status(HS_DEF_MIC_DETECT_COUNT);
@@ -1997,7 +2013,7 @@ static int htc_headset_mgr_resume(struct platform_device *pdev)
 {
 	HS_DBG();
 	if (hi->one_wire_mode == 1)
-		hs_notify_key_irq();
+		hs_mgr_notifier.hs_1wire_open();
 	return 0;
 }
 
@@ -2075,14 +2091,14 @@ static int htc_headset_mgr_probe(struct platform_device *pdev)
 	if (ret < 0)
 		goto err_usb_audio_switch_dev_register;
 
-	detect_wq = create_singlethread_workqueue("detect");
+	detect_wq = create_workqueue("detect");
 	if (detect_wq == NULL) {
 		ret = -ENOMEM;
 		HS_ERR("Failed to create detect workqueue");
 		goto err_create_detect_work_queue;
 	}
 
-	button_wq = create_singlethread_workqueue("button");
+	button_wq = create_workqueue("button");
 	if (button_wq  == NULL) {
 		ret = -ENOMEM;
 		HS_ERR("Failed to create button workqueue");

@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2012, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -234,6 +234,27 @@ static int msm_voip_dtx_mode_get(struct snd_kcontrol *kcontrol,
 
 	return 0;
 }
+static int msm_voip_fens_put(struct snd_kcontrol *kcontrol,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	int fens_enable = ucontrol->value.integer.value[0];
+
+	pr_info("%s: FENS_VOIP enable=%d\n", __func__, fens_enable);
+
+	voc_set_pp_enable(voc_get_session_id(VOIP_SESSION_NAME),
+				MODULE_ID_VOICE_MODULE_FENS, fens_enable);
+
+	return 0;
+}
+
+static int msm_voip_fens_get(struct snd_kcontrol *kcontrol,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] =
+			voc_get_pp_enable(voc_get_session_id(VOIP_SESSION_NAME),
+				 MODULE_ID_VOICE_MODULE_FENS);
+	return 0;
+}
 
 static struct snd_kcontrol_new msm_voip_controls[] = {
 	SOC_SINGLE_EXT("Voip Tx Mute", SND_SOC_NOPM, 0, 1, 0,
@@ -245,6 +266,8 @@ static struct snd_kcontrol_new msm_voip_controls[] = {
 				msm_voip_mode_rate_config_put),
 	SOC_SINGLE_EXT("Voip Dtx Mode", SND_SOC_NOPM, 0, 1, 0,
 				msm_voip_dtx_mode_get, msm_voip_dtx_mode_put),
+	SOC_SINGLE_EXT("FENS_VOIP Enable", SND_SOC_NOPM, 0, 1, 0,
+				msm_voip_fens_get, msm_voip_fens_put),
 };
 
 static int msm_pcm_voip_probe(struct snd_soc_platform *platform)
@@ -726,7 +749,7 @@ static int msm_pcm_prepare(struct snd_pcm_substream *substream)
 	int ret = 0;
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct voip_drv_info *prtd = runtime->private_data;
-	uint32_t media_type = 0;
+	int32_t media_type = 0;
 	uint32_t rate_type = 0;
 
 	mutex_lock(&prtd->lock);
@@ -1039,7 +1062,7 @@ static int voip_get_rate_type(uint32_t mode, uint32_t rate,
 static int voip_get_media_type(uint32_t mode,
 				unsigned int samp_rate)
 {
-	uint32_t media_type;
+	int32_t media_type;
 
 	pr_debug("%s: mode=%d, samp_rate=%d\n", __func__,
 		mode, samp_rate);
