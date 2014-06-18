@@ -228,7 +228,7 @@ static uint8_t rumbas_select_ois_map_table(table_type op)
 			break;
 	}
 	rc = request_firmware(&fw, "ois_param", &(rumbas_act_t.i2c_client.client->dev));
-	if (rc!=0) {
+	if (rc!=0 || !fw) {
 		pr_info("[OIS] request_firmware: Debug file doesn't exist, use default table\n");
 	} else {
 		ois_data = (unsigned char *)fw->data;
@@ -1443,7 +1443,7 @@ static struct msm_actuator_get_ois_cal_info_t cal_info;
 int32_t  rumbas_act_read_cal_data(void)
 {
 	int32_t rc = 0;
-	uint8_t byte_data[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+	uint8_t byte_data[8];
 
 	int16_t *x_offset_ptr;
 	int16_t *y_offset_ptr;

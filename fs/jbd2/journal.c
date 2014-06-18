@@ -44,7 +44,6 @@
 #include <linux/backing-dev.h>
 #include <linux/bitops.h>
 #include <linux/ratelimit.h>
-#include <linux/delay.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/jbd2.h>
@@ -579,7 +578,7 @@ int jbd2_journal_bmap(journal_t *journal, unsigned long blocknr,
 struct journal_head *jbd2_journal_get_descriptor_buffer(journal_t *journal)
 {
 	struct buffer_head *bh;
-	unsigned long long blocknr = 0;
+	unsigned long long blocknr;
 	int err;
 
 	err = jbd2_journal_next_log_block(journal, &blocknr);
@@ -817,8 +816,6 @@ static journal_t * journal_init_common (void)
 	journal->j_commit_interval = (HZ * JBD2_DEFAULT_MAX_COMMIT_AGE);
 	journal->j_min_batch_time = 0;
 	journal->j_max_batch_time = 15000; 
-	
-	journal->commit_callback_done = 0;
 
 	
 	journal->j_flags = JBD2_ABORT;
@@ -893,7 +890,7 @@ journal_t * jbd2_journal_init_inode (struct inode *inode)
 	char *p;
 	int err;
 	int n;
-	unsigned long long blocknr = 0;
+	unsigned long long blocknr;
 
 	if (!journal)
 		return NULL;
@@ -1399,11 +1396,6 @@ int jbd2_journal_flush(journal_t *journal)
 	spin_lock(&journal->j_list_lock);
 	while (!err && journal->j_checkpoint_transactions != NULL) {
 		spin_unlock(&journal->j_list_lock);
-		if (journal->commit_callback_done) {
-			msleep(1);
-			spin_lock(&journal->j_list_lock);
-			continue;
-		}
 		mutex_lock(&journal->j_checkpoint_mutex);
 		err = jbd2_log_do_checkpoint(journal);
 		mutex_unlock(&journal->j_checkpoint_mutex);
